@@ -1,0 +1,187 @@
+# =============================================================================
+# Zabbix 7.0 LTS — Docker Compose V2
+# Запуск: docker compose up -d
+# Зупинка: docker compose down
+# Логи:   docker compose logs -f zabbix-server
+# =============================================================================
+
+name: zabbix_lab
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 15 Alpine — мінімальний розмір, максимальна стабільність
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: zabbix_postgres
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB:       ${POSTGRES_DB}
+      # Передаємо tuning параметри через змінну PostgreSQL
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      # Персистентні дані БД — вся БД в одній папці проекту
+      - ./db_data:/var/lib/postgresql/data
+      # Кастомний tuning конфіг (підключається автоматично)
+      - ./postgres_conf/zbx_tuning.conf:/etc/postgresql/zbx_tuning.conf:ro
+    command: >
+      postgres
+        -c config_file=/var/lib/postgresql/data/postgresql.conf
+        -c include_if_exists='/etc/postgresql/zbx_tuning.conf'
+    networks:
+      - zabbix_net
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2.0'
+        reservations:
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Zabbix Server 7.0 LTS
+  # ---------------------------------------------------------------------------
+  zabbix-server:
+    image: zabbix/zabbix-server-pgsql:alpine-7.0-latest
+    container_name: zabbix_server
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DB_SERVER_HOST:         ${POSTGRES_HOST}
+      DB_SERVER_PORT:         ${POSTGRES_PORT}
+      POSTGRES_USER:          ${POSTGRES_USER}
+      POSTGRES_PASSWORD:      ${POSTGRES_PASSWORD}
+      POSTGRES_DB:            ${POSTGRES_DB}
+      ZBX_SERVER_HOST:        ${ZBX_SERVER_HOST}
+      # Пінгери — ключовий параметр для 500+ хостів
+      ZBX_STARTPINGERS:       ${ZBX_STARTPINGERS}
+      ZBX_STARTPOLLERS:       ${ZBX_STARTPOLLERS}
+      ZBX_STARTPOLLERSUNREACHABLE: ${ZBX_STARTPOLLERSUNREACHABLE}
+      ZBX_STARTTRAPPERS:      ${ZBX_STARTTRAPPERS}
+      ZBX_STARTDISCOVERERS:   ${ZBX_STARTDISCOVERERS}
+      ZBX_STARTHTTPPOLLERS:   ${ZBX_STARTHTTPPOLLERS}
+      # Cache
+      ZBX_VALUECACHESIZE:     ${ZBX_VALUECACHESIZE}
+      ZBX_CACHESIZE:          ${ZBX_CACHESIZE}
+      ZBX_HISTORYCACHESIZE:   ${ZBX_HISTORYCACHESIZE}
+      ZBX_HISTORYINDEXCACHESIZE: ${ZBX_HISTORYINDEXCACHESIZE}
+      ZBX_TRENDCACHESIZE:     ${ZBX_TRENDCACHESIZE}
+      # Housekeeping
+      ZBX_HOUSEKEEPINGFREQUENCY: ${ZBX_HOUSEKEEPINGFREQUENCY}
+      ZBX_MAXHOUSEKEEPERDELETE:  ${ZBX_MAXHOUSEKEEPERDELETE}
+    ports:
+      - "10051:10051"       # Zabbix трапер (агенти → сервер)
+    volumes:
+      - ./zbx_alertscripts:/usr/lib/zabbix/alertscripts
+      - ./zbx_externalscripts:/usr/lib/zabbix/externalscripts
+    networks:
+      - zabbix_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '3.0'
+        reservations:
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "zabbix_server --version || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    sysctls:
+      # Необхідно для ICMP пінгу без root всередині контейнера
+      net.ipv4.ping_group_range: "0 2147483647"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+  # ---------------------------------------------------------------------------
+  # Zabbix Web UI — Nginx + PHP-FPM
+  # ---------------------------------------------------------------------------
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-pgsql:alpine-7.0-latest
+    container_name: zabbix_web
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      ZBX_SERVER_HOST:    zabbix-server
+      ZBX_SERVER_PORT:    ${ZBX_SERVER_PORT}
+      DB_SERVER_HOST:     ${POSTGRES_HOST}
+      DB_SERVER_PORT:     ${POSTGRES_PORT}
+      POSTGRES_USER:      ${POSTGRES_USER}
+      POSTGRES_PASSWORD:  ${POSTGRES_PASSWORD}
+      POSTGRES_DB:        ${POSTGRES_DB}
+      PHP_TZ:             ${PHP_TZ}
+      ZBX_SERVER_NAME:    ${ZBX_SERVER_NAME}
+      ZBX_MAXEXECUTIONTIME:  ${ZBX_MAXEXECUTIONTIME}
+      ZBX_MEMORYLIMIT:       ${ZBX_MEMORYLIMIT}
+      ZBX_POSTMAXSIZE:       ${ZBX_POSTMAXSIZE}
+      ZBX_UPLOADMAXFILESIZE: ${ZBX_UPLOADMAXFILESIZE}
+    ports:
+      - "${WEB_PORT}:8080"  # Web UI
+    networks:
+      - zabbix_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      zabbix-server:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  zabbix_net:
+    name: zabbix_lab_network
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+# =============================================================================
+# Volumes — НЕ використовуємо named volumes, щоб весь проект
+# залишався в одній папці zabbix_lab/ для легкого переїзду
+# =============================================================================
+# Всі дані монтуються через ./db_data (bind mount — портабельно)
