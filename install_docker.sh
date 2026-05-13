@@ -1,49 +1,32 @@
 #!/bin/bash
 
-# Кольори для виводу
-GREEN='\033[0;32m'
-NC='\033[0m' # No Color
+echo "1. Оновлення пакетів..."
+sudo apt update && sudo apt upgrade -y
 
-echo -e "${GREEN}1. Оновлення системи та встановлення залежностей...${NC}"
-sudo apt update && sudo apt install -y ca-certificates curl gnupg
+echo "2. Встановлення залежностей..."
+sudo apt install -y ca-certificates curl gnupg
 
-echo -e "${GREEN}2. Додавання GPG-ключа Docker...${NC}"
+echo "3. Додавання GPG-ключа Docker..."
 sudo install -m 0755 -d /etc/apt/keyrings
-curl -fsSL [https://download.docker.com/linux/ubuntu/gpg](https://download.docker.com/linux/ubuntu/gpg) | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+# Очищений рядок без зайвих дужок:
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg --yes
 sudo chmod a+r /etc/apt/keyrings/docker.gpg
 
-echo -e "${GREEN}3. Налаштування репозиторію...${NC}"
+echo "4. Налаштування репозиторію..."
 echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] [https://download.docker.com/linux/ubuntu](https://download.docker.com/linux/ubuntu) \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
   $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
   sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-echo -e "${GREEN}4. Встановлення Docker та Docker Compose...${NC}"
+echo "5. Встановлення Docker..."
 sudo apt update
 sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-echo -e "${GREEN}5. Додавання користувача $USER до групи docker...${NC}"
+echo "6. Налаштування прав для користувача $USER..."
 sudo usermod -aG docker $USER
 
-echo -e "${GREEN}6. Ввімкнення автозапуску сервісів...${NC}"
-sudo systemctl enable docker.service
-sudo systemctl enable containerd.service
-
-echo -e "${GREEN}Готово! Перезавантажте сесію або викона```
-
-### Як запустити цей скрипт:
-
-1.  **Зробіть файл виконуваним:**
-    ```bash
-    chmod +x install_docker.sh
-    ```
-2.  **Запустіть його:**
-    ```bash
-    ./install_docker.sh
-    ```
-
----
-
-### Що цей скрипт робить "під капотом":йте: newgrp docker${NC}"
+echo "Перевірка версій:"
 docker --version
 docker compose version
+
+echo "Готово! Виконайте 'newgrp docker' або перезайдіть у систему."
